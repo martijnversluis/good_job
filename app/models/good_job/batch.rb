@@ -26,10 +26,12 @@ module GoodJob
       :enqueued_at,
       :finished_at,
       :discarded_at,
+      :callbacks_finished_at,
       :enqueued?,
       :finished?,
       :succeeded?,
       :discarded?,
+      :callbacks_finished?,
       :description,
       :description=,
       :on_finish,
@@ -142,7 +144,9 @@ module GoodJob
         buffer = GoodJob::Adapter::InlineBuffer.capture do
           record.transaction do
             record.with_advisory_lock(function: "pg_advisory_xact_lock") do
-              record.update!(discarded_at: nil, finished_at: nil)
+              update_attributes = { discarded_at: nil, finished_at: nil }
+              update_attributes[:callbacks_finished_at] = nil if GoodJob::BatchRecord.callbacks_finished_at_migrated?
+              record.update!(update_attributes)
               record.jobs.discarded.each(&:retry_job)
               record._continue_discard_or_finish(lock: false)
             end

@@ -18,11 +18,16 @@ module GoodJob
     scope :not_discarded, -> { where(discarded_at: nil) }
     scope :succeeded, -> { finished.not_discarded }
 
-    scope :finished_before, ->(timestamp) { where(arel_table['finished_at'].lteq(bind_value('finished_at', timestamp, ActiveRecord::Type::DateTime))) }
+    # TODO: v5 rename this `callbacks_finished_before`
+    scope :finished_before, lambda { |timestamp|
+      finished_column_name = callbacks_finished_at_migrated? ? 'callbacks_finished_at' : 'finished_at'
+      where(arel_table[finished_column_name].lteq(bind_value(finished_column_name, timestamp, ActiveRecord::Type::DateTime)))
+    }
 
     alias_attribute :enqueued?, :enqueued_at
     alias_attribute :discarded?, :discarded_at
     alias_attribute :finished?, :finished_at
+    alias_attribute :callbacks_finished?, :callbacks_finished_at
 
     scope :display_all, (lambda do |after_created_at: nil, after_id: nil|
       query = order(created_at: :desc, id: :desc)
@@ -38,6 +43,17 @@ module GoodJob
       query
     end)
 
+    def self.callbacks_finished_at_migrated?
+      column_names.include?('callbacks_finished_at')
+    end
+
+    def self.indexes_migrated?
+      return true if connection.index_name_exists?(:good_job_batches, :index_good_job_batches_for_cleanup)
+
+      migration_pending_warning!
+      false
+    end
+
     # Whether the batch has finished and no jobs were discarded
     # @return [Boolean]
     def succeeded?
@@ -52,13 +68,14 @@ module GoodJob
       attributes.except('serialized_properties').merge(properties: properties)
     end
 
-    def _continue_discard_or_finish(execution = nil, lock: true)
-      execution_discarded = execution && execution.finished_at.present? && execution.error.present?
+    def _continue_discard_or_finish(job = nil, lock: true)
+      job_discarded = job && job.finished_at.present? && job.error.present?
       buffer = GoodJob::Adapter::InlineBuffer.capture do
         advisory_lock_maybe(lock) do
           Batch.within_thread(batch_id: nil, batch_callback_id: id) do
             reload
-            if execution_discarded && !discarded_at
+
+            if job_discarded && !discarded_at
               update(discarded_at: Time.current)
               on_discard.constantize.set(priority: callback_priority, queue: callback_queue_name).perform_later(to_batch, { event: :discard }) if on_discard.present?
             end
@@ -68,6 +85,8 @@ module GoodJob
               on_success.constantize.set(priority: callback_priority, queue: callback_queue_name).perform_later(to_batch, { event: :success }) if !discarded_at && on_success.present?
               on_finish.constantize.set(priority: callback_priority, queue: callback_queue_name).perform_later(to_batch, { event: :finish }) if on_finish.present?
             end
+
+            update(callbacks_finished_at: Time.current) if finished_at && self.class.callbacks_finished_at_migrated? && callbacks_finished_at.nil? && callback_jobs.where(finished_at: nil).count.zero?
           end
         end
       end

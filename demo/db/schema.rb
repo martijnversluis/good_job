@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema.define(version: 2024_06_13_151310) do
+ActiveRecord::Schema.define(version: 2024_08_01_143344) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pgcrypto"
   enable_extension "plpgsql"
@@ -28,6 +28,9 @@ ActiveRecord::Schema.define(version: 2024_06_13_151310) do
     t.datetime "enqueued_at"
     t.datetime "discarded_at"
     t.datetime "finished_at"
+    t.datetime "callbacks_finished_at"
+    t.index ["callbacks_finished_at", "discarded_at"], name: "index_good_job_batches_for_cleanup", where: "(callbacks_finished_at IS NOT NULL)"
+    t.index ["created_at", "id"], name: "index_good_job_batches_for_display"
   end
 
   create_table "good_job_executions", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
